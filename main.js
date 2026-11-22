@@ -24,10 +24,12 @@ const store = makeInMemoryStore({
     })
 })
 
-let phoneNumber = "24102150169"
+// Set this to the actual WhatsApp number in Bot-Hosting startup variables.
+// Never use a hard-coded example number for unattended pairing.
+const configuredPhoneNumber = String(process.env.DOMMA_PHONE_NUMBER || process.env.WHATSAPP_PHONE_NUMBER || '').replace(/[^0-9]/g, '')
 let owner = JSON.parse(fs.readFileSync('./lib/database/owner.json'))
 
-const pairingCode = !!phoneNumber || process.argv.includes("--pairing-code")
+const pairingCode = !process.argv.includes("--qr")
 const useMobile = process.argv.includes("--mobile")
 
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
@@ -36,7 +38,7 @@ const question = (text) => new Promise((resolve) => rl.question(text, resolve))
 async function startXeonBotInc() {
 //------------------------------------------------------
 let { version, isLatest } = await fetchLatestBaileysVersion()
-const {  state, saveCreds } =await useMultiFileAuthState(`./session`)
+const {  state, saveCreds } =await useMultiFileAuthState(path.join(__dirname, 'session'))
     const msgRetryCounterCache = new NodeCache() // for retry message, "waiting message"
     const XeonBotInc = makeWASocket({
         logger: pino({ level: 'silent' }),
@@ -65,32 +67,28 @@ const {  state, saveCreds } =await useMultiFileAuthState(`./session`)
    if (pairingCode && !XeonBotInc.authState.creds.registered) {
       if (useMobile) throw new Error('Cannot use pairing code with mobile api')
 
-      let phoneNumber
-      if (!!phoneNumber) {
-         phoneNumber = phoneNumber.replace(/[^0-9]/g, '')
-
-         if (!Object.keys(PHONENUMBER_MCC).some(v => phoneNumber.startsWith(v))) {
-            console.log(chalk.bgBlack(chalk.redBright("Start with country code of your WhatsApp Number, Example : +24102150169")))
-            process.exit(0)
-         }
-      } else {
-         phoneNumber = await question(chalk.bgBlack(chalk.greenBright(`Please type your WhatsApp number 😍\nFor example: +24102150169 : `)))
-         phoneNumber = phoneNumber.replace(/[^0-9]/g, '')
-
-         // Ask again when entering the wrong number
-         if (!Object.keys(PHONENUMBER_MCC).some(v => phoneNumber.startsWith(v))) {
-            console.log(chalk.bgBlack(chalk.redBright("Start with country code of your WhatsApp Number, Example : +24102150169")))
-
-            phoneNumber = await question(chalk.bgBlack(chalk.greenBright(`Please type your WhatsApp number 😍\nFor example: +24102150169 : `)))
-            phoneNumber = phoneNumber.replace(/[^0-9]/g, '')
-            rl.close()
-         }
+      let pairingNumber = configuredPhoneNumber
+      // The saved Baileys session is reused above. Prompt only if unregistered
+      // and no number was supplied through Bot-Hosting startup variables.
+      if (!pairingNumber) {
+         console.log(chalk.yellow('DOMA: session non enregistrée. Configure DOMMA_PHONE_NUMBER dans Bot-Hosting pour démarrer sans saisie console.'))
+         pairingNumber = await question(chalk.bgBlack(chalk.greenBright('Please type your WhatsApp number (with country code): ')))
+         pairingNumber = pairingNumber.replace(/[^0-9]/g, '')
+         rl.close()
       }
-
+      if (!/^[1-9][0-9]{6,14}$/.test(pairingNumber) ||
+          !Object.keys(PHONENUMBER_MCC).some(prefix => pairingNumber.startsWith(prefix))) {
+         console.error(chalk.red('DOMA: numéro WhatsApp invalide. Vérifie l’indicatif et les chiffres.'))
+         return
+      }
       setTimeout(async () => {
-         let code = await XeonBotInc.requestPairingCode(phoneNumber)
-         code = code?.match(/.{1,4}/g)?.join("-") || code
-         console.log(chalk.black(chalk.bgGreen(`Your Pairing Code : `)), chalk.black(chalk.white(code)))
+         try {
+            let code = await XeonBotInc.requestPairingCode(pairingNumber)
+            code = code?.match(/.{1,4}/g)?.join('-') || code
+            console.log(chalk.black(chalk.bgGreen('Your Pairing Code : ')), chalk.black(chalk.white(code)))
+         } catch (error) {
+            console.error(chalk.red('DOMA: impossible de demander le code d’appairage.'), error?.message || error)
+         }
       }, 3000)
    }
 
