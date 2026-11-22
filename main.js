@@ -10,19 +10,45 @@ const axios = require('axios')
 const PhoneNumber = require('awesome-phonenumber')
 const { imageToWebp, videoToWebp, writeExifImg, writeExifVid } = require('./lib/exif')
 const { smsg, isUrl, generateMessageTag, getBuffer, getSizeMedia, fetch, await, sleep, reSize } = require('./lib/myfunc')
-const { default: XeonBotIncConnect, delay, PHONENUMBER_MCC, makeCacheableSignalKeyStore, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, generateForwardMessageContent, prepareWAMessageMedia, generateWAMessageFromContent, generateMessageID, downloadContentFromMessage, makeInMemoryStore, jidDecode, proto, Browsers} = require("@whiskeysockets/baileys")
+const { default: XeonBotIncConnect, delay, PHONENUMBER_MCC, makeCacheableSignalKeyStore, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, generateForwardMessageContent, prepareWAMessageMedia, generateWAMessageFromContent, generateMessageID, downloadContentFromMessage, jidDecode, proto, Browsers} = require("@whiskeysockets/baileys")
 const NodeCache = require("node-cache")
 const Pino = require("pino")
 const readline = require("readline")
 const { parsePhoneNumber } = require("libphonenumber-js")
 const makeWASocket = require("@whiskeysockets/baileys").default
 
-const store = makeInMemoryStore({
-    logger: pino().child({
-        level: 'silent',
-        stream: 'store'
-    })
-})
+// Recent Baileys versions no longer export makeInMemoryStore.
+// Keep a bounded in-memory message cache for quoted-message lookups.
+const messageCache = new Map()
+const store = {
+    contacts: Object.create(null),
+    async loadMessage(jid, id) {
+        return messageCache.get(jid + ':' + id) || undefined
+    },
+    bind(events) {
+        events.on('messages.upsert', update => {
+            for (const message of update?.messages || []) {
+                const jid = message?.key?.remoteJid
+                const id = message?.key?.id
+                if (!jid || !id) continue
+                messageCache.set(jid + ':' + id, message)
+                if (messageCache.size > 300) {
+                    messageCache.delete(messageCache.keys().next().value)
+                }
+            }
+        })
+        events.on('contacts.update', contacts => {
+            for (const contact of contacts || []) {
+                if (contact?.id) {
+                    store.contacts[contact.id] = {
+                        ...store.contacts[contact.id],
+                        ...contact
+                    }
+                }
+            }
+        })
+    }
+}
 
 // Set this to the actual WhatsApp number in Bot-Hosting startup variables.
 // Never use a hard-coded example number for unattended pairing.
